@@ -1,0 +1,272 @@
+#!/bin/bash
+##########################################################################
+#%
+#% Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
+#% Desc: It will generate one snapshot of the snmp tree every day. 
+#% Where
+#%    host:         Name or IP 
+#%    community:    SNMP Community
+#%    MIB:          SNMP MIB
+#%
+#%  OPTIONAL Values!
+#%    version:      SNMP version (1 or 2)
+#%    Second_Step:  Minumun second of the last history rerpot (default 60)
+#%    History_file: Fullpath of History file.
+#%    warn:         Warning value (default 85)
+#%    crit:         Critial value (default 95)
+#%    regex:        Regular Expresion (like GREP)
+#%    verbose:      ....
+#%
+#% Ver: 20170214 -  Juan Pablo G. Esquerdo - jesquerdo@transperfect.com
+#%
+##########################################################################
+
+##########################################################################
+#### VARIABLES
+#------------------------------------------------------------------------#
+NAMESCRIPT="$0"
+SNMPWALK="/usr/bin/snmpwalk"
+I_SEC_STEP=60
+I_WARNING=85
+I_CRITICAL=95
+I_SIZE_HIST=128
+DATA_SECONDS=$(date +%s)
+##########################################################################
+
+
+
+##########################################################################
+#### FUNCTIONS
+#------------------------------------------------------------------------#
+#Show the info
+useme(){
+	awk '/^#%/{print substr($0,3);}' "$NAMESCRIPT"
+	exit 1
+}
+
+#Print MIBs
+print_mibs(){
+	$DEBUG "$SNMPWALK" -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_MIB" >&2
+	$SNMPWALK -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_MIB"| awk   'BEGIN{printf '$DATA_SECONDS'} {printf "\t"$NF}'
+	if [ $? == 0 ];then
+		return 0
+	else
+		return 1
+	fi
+}
+
+
+recheck_args(){
+	if [ $(echo $I_WARNING | sed 's/[0-9]//g'|wc -c) -gt 1 ];then
+		echo "ERR: Warning value is not a Integer number.     $I_WARNING"
+		useme
+	fi
+	if [ $(echo $I_CRITICAL | sed 's/[0-9]//g'|wc -c) -gt 1 ];then
+		echo "ERR: Critical value is not a Integer number.    $I_CRITICAL"
+		useme
+	fi
+
+	if [ $(echo $I_SEC_STEP | sed 's/[0-9]//g'|wc -c) -gt 1 ];then
+		echo "ERR: Second_Step value is not a positive Integer number.  $I_SEC_STEP"
+		useme
+	fi
+
+	if [ $(echo $I_SIZE_HIST | sed 's/[0-9]//g'|wc -c) -gt 1 ];then
+		echo "ERR: Max Size for history value is not a positive Integer number.  $I_SIZE_HIST"
+		useme
+	fi
+
+	if [ -z "$SNMP_VER" ];then
+		SNMP_VER=1
+	fi
+	if [ $(echo "$SNMP_VER" | grep -c -e ^[12]$ -e ^2c$) -gt 1 ];then
+		echo "ERR: Version SNMP value is not 1, 2 or 2c.     '$SNMP_VER'"
+		useme
+	fi
+
+	if [ -z "$SNMP_MIB" ];then
+		echo "ERR: MIB is empty, or not defined.     '$SNMP_MIB'"
+		useme
+	fi
+
+	if [ -z "$FILE_HIST" ];then
+		FILE_HIST=$(print_file_hist)
+	fi
+}
+
+
+check_and_create() {
+	if [ ! -e "$1" ];then
+		touch "$1"
+		chmod 666 "$1"
+		if [ ! -e "$1" ];then
+			echo "ERR: I cannot create '$1'."
+			exit 2
+		fi		
+	fi
+	return 0
+}
+
+#It will save LINE_PRINT in FILE_NAME only if it is more of I_SEC_STEP
+#This function will also give me OFSET_TIME and LAST_LINE.
+get_add_and_rotate(){
+	FILE_NAME="$1"  # It should be the same value that FILE_HIST
+	LINE_PRINT="$2" # It should be the same value that LINE_VALUES
+
+	SIZE_FILE=$(wc -l < "$1")
+	if [ $SIZE_FILE == 0 ]; then
+		LAST_TIMESTAMP=0
+	else
+		#"tail -1 FILE |awk '{print $1}'" is very very very much faster 
+		#  than other solutions one command (with big files)
+		LAST_LINE="$(tail -1 "$FILE_NAME")"
+		LAST_TIMESTAMP=$(awk '{if ($1>0){print $1}else{print "ERR"};exit}' <<< "$LAST_LINE" )
+	fi
+
+	#Error control
+	time_error_control "$LAST_TIMESTAMP" "$FILE_NAME"
+
+	if [ "$DATA_SECONDS" -ge "$((LAST_TIMESTAMP + I_SEC_STEP))" ];then
+		#If it is very big, rotate
+		$DEBUG "It is time!!!.  "$DATA_SECONDS" > $LAST_TIMESTAMP + $I_SEC_STEP"
+		if [ $SIZE_FILE -ge $I_SIZE_HIST ];then
+			$DEBUG "Rotate. Removing the first line."
+			sed -i -e "1d"  "$1"
+		fi
+		#I will try to get previous vaule
+		echo "$2" >> "$1"
+	else
+		$DEBUG "It is too soon.  "$DATA_SECONDS" < $LAST_TIMESTAMP + $I_SEC_STEP"
+		LAST_LINE="$(tail -2 "$FILE_NAME"|head -1)"
+		LAST_TIMESTAMP=$(awk '{if ($1>0){print $1}else{print "ERR"};exit}' <<< "$LAST_LINE" )
+		#LAST_TIMESTAMP=$(tail -2 "$1"|awk '{if ($1>0){print $1}else{print "ERR"};exit;}')
+		#Error control
+		time_error_control "$LAST_TIMESTAMP" "$FILE_NAME"
+	fi
+	OFSET_TIME=$((DATA_SECONDS - LAST_TIMESTAMP))
+	$DEBUG "OFSET_TIME=$OFSET_TIME"
+}
+
+time_error_control(){
+	if [ -z "$1" ] || [ $1 == "ERR" ];then
+		echo echo "ERR: Wrong syntax in '$2'"
+		exit 2
+	fi
+}
+
+print_file_hist(){
+	#I don't want to write the SNMP community in a public FS (/tmp).
+	SUM_COMM=$(echo ${SNMP_COMM}| sum  |awk '{print $1}')
+	BASENAME_SCRIPT="$(basename $NAMESCRIPT)"
+	echo "/tmp/${BASENAME_SCRIPT}-${SNMP_HOST}-${SUM_COMM}-${I_SEC_STEP}.tmp"
+}
+
+
+
+##########################################################################
+##########################################################################
+##########################################################################
+#### MAIN
+##########################################################################
+##########################################################################
+##########################################################################
+#------------------------------------------------------------------------#
+if [ $# -ge 6 ];then
+# Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v|--verbose]
+	while [[ $# > 1 ]]; do
+
+		case "$1" in
+			-H|--host)
+				SNMP_HOST="$2"
+				shift # past argument=value
+			;;
+			-C|--community)
+				SNMP_COMM="$2"
+				shift # past argument=value
+			;;
+			-M|--MIB)
+				SNMP_MIB="$2"
+				shift # past argument=value
+			;;
+			-V|--version)
+				SNMP_VER="$2"
+				shift # past argument=value
+			;;
+			-S|--second)
+				I_SEC_STEP="$2"
+				shift # past argument=value
+			;;
+			-H|--history)
+				FILE_HIST="$2"
+				shift # past argument=value
+			;;
+			-m|--max_size_hist)
+				I_SIZE_HIST="$2"
+				shift # past argument=value
+			;;
+			-w|--warning)
+				I_WARNING="$2"
+				shift # past argument=value
+			;;
+			-c|--critical)
+				I_CRITICAL="$2"
+				shift # past argument=value
+			;;
+			-v|--verbose)
+				DEBUG="/bin/echo -e DEBUG:"
+			;;
+		esac
+		shift
+	done
+	##Fix bug. If "verbose" is the last arg...
+	if [[ "$1" == "-v" ]] || [[ "$1" == "--verbose" ]] ; then
+		DEBUG="/bin/echo -e DEBUG:"
+	fi
+
+	###Checks and set variables.
+	recheck_args
+
+else
+	useme
+	exit 3
+fi
+
+
+if [ -z "$DEBUG" ];then
+	DEBUG="false"
+else
+	echo "SNMP_HOST = '$SNMP_HOST'"
+	echo "SNMP_COMM = '$SNMP_COMM'"
+	echo "SNMP_VER  = '$SNMP_VER'"
+	echo "SNMP_MIB  = '$SNMP_MIB'"
+	echo "SEC_STEP  = '$I_SEC_STEP'"
+	echo "FILE_HIST = '$FILE_HIST'"
+	echo "WARNING   = '$I_WARNING'"
+	echo "CRITICAL  = '$I_CRITICAL'"
+	echo "DEBUG     = ... Can you see me?"  
+fi
+
+
+#Check if exist the FILE and create it if not. (and report if it cannot create it)
+check_and_create "$FILE_HIST"
+
+#Get the SNMP values
+LINE_VALUES=$(print_mibs)
+if [ $? != 0 ];then
+	$DEBUG "$LINE_VALUES"
+	echo "CRITICAL: Unable to get SNMP"
+	exit 2
+fi
+
+#This function will also give me OFSET_TIME and LAST_LINE.
+add_and_rotate "$FILE_HIST" "$LINE_VALUES"
+$DEBUG "FILE:      '$FILE_HIST'"
+$DEBUG "Answer:    '$LINE_VALUES'"
+$DEBUG "List line: '$LAST_LINE'"
+
+
+
+
+COUNT=0
+
+
