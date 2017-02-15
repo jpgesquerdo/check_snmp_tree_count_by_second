@@ -1,7 +1,7 @@
 #!/bin/bash
 ##########################################################################
 #%
-#% Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
+#% Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-T TITLE] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
 #% Desc: It will generate one snapshot of the snmp tree every day. 
 #% Where
 #%    host:         Name or IP 
@@ -17,7 +17,7 @@
 #%    regex:        Regular Expresion (like GREP)
 #%    verbose:      ....
 #%
-#% Ver: 20170214 -  Juan Pablo G. Esquerdo - jesquerdo@transperfect.com
+#% Ver: 20170215 -  Juan Pablo G. Esquerdo 
 #%
 ##########################################################################
 
@@ -108,7 +108,7 @@ check_and_create() {
 }
 
 #It will save LINE_PRINT in FILE_NAME only if it is more of I_SEC_STEP
-#This function will also give me OFSET_TIME and LAST_LINE.
+#This function will alsoa print LAST_LINE.
 get_add_and_rotate(){
 	FILE_NAME="$1"  # It should be the same value that FILE_HIST
 	LINE_PRINT="$2" # It should be the same value that LINE_VALUES
@@ -128,23 +128,22 @@ get_add_and_rotate(){
 
 	if [ "$DATA_SECONDS" -ge "$((LAST_TIMESTAMP + I_SEC_STEP))" ];then
 		#If it is very big, rotate
-		$DEBUG "It is time!!!.  "$DATA_SECONDS" > $LAST_TIMESTAMP + $I_SEC_STEP"
+		$DEBUG "It is time!!!.  "$DATA_SECONDS" > $LAST_TIMESTAMP + $I_SEC_STEP"  >&2
 		if [ $SIZE_FILE -ge $I_SIZE_HIST ];then
-			$DEBUG "Rotate. Removing the first line."
+			$DEBUG "Rotate. Removing the first line."  >&2
 			sed -i -e "1d"  "$1"
 		fi
 		#I will try to get previous vaule
 		echo "$2" >> "$1"
 	else
-		$DEBUG "It is too soon.  "$DATA_SECONDS" < $LAST_TIMESTAMP + $I_SEC_STEP"
+		$DEBUG "It is too soon.  "$DATA_SECONDS" < $LAST_TIMESTAMP + $I_SEC_STEP" >&2
 		LAST_LINE="$(tail -2 "$FILE_NAME"|head -1)"
 		LAST_TIMESTAMP=$(awk '{if ($1>0){print $1}else{print "ERR"};exit}' <<< "$LAST_LINE" )
 		#LAST_TIMESTAMP=$(tail -2 "$1"|awk '{if ($1>0){print $1}else{print "ERR"};exit;}')
 		#Error control
 		time_error_control "$LAST_TIMESTAMP" "$FILE_NAME"
 	fi
-	OFSET_TIME=$((DATA_SECONDS - LAST_TIMESTAMP))
-	$DEBUG "OFSET_TIME=$OFSET_TIME"
+	echo "$LAST_LINE"
 }
 
 time_error_control(){
@@ -161,7 +160,62 @@ print_file_hist(){
 	echo "/tmp/${BASENAME_SCRIPT}-${SNMP_HOST}-${SUM_COMM}-${I_SEC_STEP}.tmp"
 }
 
+prorcess_line(){
+	#echo
+	#echo ++++++++++++++++++++
+	#echo -e "$1\n$2" 
+	#echo ++++++++++++++++++++
+	#echo
+	echo -e "$1\n$2" |awk -v crit="$I_CRITICAL" -v warn="$I_WARNING" -v title="$S_TITLE" '{
+			for (i=1;i<=NF;i++){
+				if (NR==1){
+					value[i]=-$(i);
+				}else{
+					value[i]+=$(i);
+				}
+			}
+		}
 
+		END{
+			stdout="";
+			end_warn=0;	
+			end_crit=0;	
+			if (NR==2){
+				sec=value[1];	
+				for (i=2;i<=length(value);i++){
+					val=int(value[i]*10/sec);
+					val/=10;
+					if (val>crit){
+						end_crit=1;
+						stdout=stdout"*"i-2"="val"* "
+					}else if(val>warn){
+						end_warn=1;
+						stdout=stdout"*"i-2"="val"* "
+					}else{
+						stdout=stdout""i-2"="val" "
+					}
+				}
+
+
+				if (end_crit==1){
+					printf "CRITIAL: " title " " stdout"\n"
+					exit 2
+				}else if(end_warn==1){
+					printf "WARNING: " title " " stdout"\n"
+					exit 1
+				}else{
+					printf "OK: " title " " stdout"\n"
+					exit 0
+				}
+			}else{
+				print "ERROR: Wrong syntax detected."
+				exit 3
+			}
+	}'
+	return $?
+	#OFSET_TIME=$((DATA_SECONDS - LAST_TIMESTAMP))
+	#$DEBUG "OFSET_TIME=$OFSET_TIME"  >&2
+}
 
 ##########################################################################
 ##########################################################################
@@ -172,7 +226,7 @@ print_file_hist(){
 ##########################################################################
 #------------------------------------------------------------------------#
 if [ $# -ge 6 ];then
-# Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v|--verbose]
+# Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-T TITLE] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
 	while [[ $# > 1 ]]; do
 
 		case "$1" in
@@ -190,6 +244,10 @@ if [ $# -ge 6 ];then
 			;;
 			-V|--version)
 				SNMP_VER="$2"
+				shift # past argument=value
+			;;
+			-T|--title)
+				S_TITLE="$2"
 				shift # past argument=value
 			;;
 			-S|--second)
@@ -258,15 +316,15 @@ if [ $? != 0 ];then
 	exit 2
 fi
 
-#This function will also give me OFSET_TIME and LAST_LINE.
-add_and_rotate "$FILE_HIST" "$LINE_VALUES"
+#This function will also give me LAST_LINE.
+LAST_LINE=$(get_add_and_rotate "$FILE_HIST" "$LINE_VALUES")
+
+
 $DEBUG "FILE:      '$FILE_HIST'"
 $DEBUG "Answer:    '$LINE_VALUES'"
 $DEBUG "List line: '$LAST_LINE'"
 
 
 
-
-COUNT=0
-
-
+prorcess_line "$LINE_VALUES" "$LAST_LINE";
+exit $?
