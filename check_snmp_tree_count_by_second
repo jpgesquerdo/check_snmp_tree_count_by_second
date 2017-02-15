@@ -1,12 +1,12 @@
 #!/bin/bash
 ##########################################################################
 #%
-#% Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-T TITLE] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
+#% Use: check_snmp_tree_count_by_second -H <host> -C <community> -O <OID> [-V <#version>] [-T TITLE] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
 #% Desc: It will generate one snapshot of the snmp tree every day. 
 #% Where
 #%    host:         Name or IP 
 #%    community:    SNMP Community
-#%    MIB:          SNMP MIB
+#%    OID:          SNMP OID
 #%
 #%  OPTIONAL Values!
 #%    version:      SNMP version (1 or 2)
@@ -44,10 +44,10 @@ useme(){
 	exit 1
 }
 
-#Print MIBs
-print_mibs(){
-	$DEBUG "$SNMPWALK" -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_MIB" >&2
-	$SNMPWALK -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_MIB"| awk   'BEGIN{printf '$DATA_SECONDS'} {printf "\t"$NF}'
+#Print OIDs
+print_oid_tree(){
+	$DEBUG "$SNMPWALK" -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_OID" >&2
+	$SNMPWALK -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_OID"| awk   'BEGIN{printf '$DATA_SECONDS'} {printf "\t"$NF}'
 	if [ $? == 0 ];then
 		return 0
 	else
@@ -84,8 +84,8 @@ recheck_args(){
 		useme
 	fi
 
-	if [ -z "$SNMP_MIB" ];then
-		echo "ERR: MIB is empty, or not defined.     '$SNMP_MIB'"
+	if [ -z "$SNMP_OID" ];then
+		echo "ERR: OID is empty, or not defined.     '$SNMP_OID'"
 		useme
 	fi
 
@@ -157,7 +157,7 @@ print_file_hist(){
 	#I don't want to write the SNMP community in a public FS (/tmp).
 	SUM_COMM=$(echo ${SNMP_COMM}| sum  |awk '{print $1}')
 	BASENAME_SCRIPT="$(basename $NAMESCRIPT)"
-	echo "/tmp/${BASENAME_SCRIPT}-${SNMP_HOST}-${SUM_COMM}-${I_SEC_STEP}.tmp"
+	echo "/tmp/${BASENAME_SCRIPT}-${SNMP_HOST}-${SNMP_OID}-${SUM_COMM}-${I_SEC_STEP}.tmp"
 }
 
 prorcess_line(){
@@ -226,7 +226,7 @@ prorcess_line(){
 ##########################################################################
 #------------------------------------------------------------------------#
 if [ $# -ge 6 ];then
-# Use: check_snmp_tree_count_by_second -H <host> -C <community> -M <MIB> [-V <#version>] [-T TITLE] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
+# Use: check_snmp_tree_count_by_second -H <host> -C <community> -O <OID> [-V <#version>] [-T TITLE] [-S <Second_Step>] [-H <History_file>] [-w <warn>] [-c <crit>] [-v]
 	while [[ $# > 1 ]]; do
 
 		case "$1" in
@@ -238,8 +238,8 @@ if [ $# -ge 6 ];then
 				SNMP_COMM="$2"
 				shift # past argument=value
 			;;
-			-M|--MIB)
-				SNMP_MIB="$2"
+			-O|--OID)
+				SNMP_OID="$2"
 				shift # past argument=value
 			;;
 			-V|--version)
@@ -296,7 +296,7 @@ else
 	echo "SNMP_HOST = '$SNMP_HOST'"
 	echo "SNMP_COMM = '$SNMP_COMM'"
 	echo "SNMP_VER  = '$SNMP_VER'"
-	echo "SNMP_MIB  = '$SNMP_MIB'"
+	echo "SNMP_OID  = '$SNMP_OID'"
 	echo "SEC_STEP  = '$I_SEC_STEP'"
 	echo "FILE_HIST = '$FILE_HIST'"
 	echo "WARNING   = '$I_WARNING'"
@@ -309,7 +309,7 @@ fi
 check_and_create "$FILE_HIST"
 
 #Get the SNMP values
-LINE_VALUES=$(print_mibs)
+LINE_VALUES=$(print_oid_tree)
 if [ $? != 0 ];then
 	$DEBUG "$LINE_VALUES"
 	echo "CRITICAL: Unable to get SNMP"
