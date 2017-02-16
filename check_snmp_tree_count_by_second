@@ -60,7 +60,7 @@ print_oid_tree(){
 
 print_description_oid(){
 	$DEBUG "$SNMPWALK" -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$S_DESC_OID" >&2
-	$SNMPWALK -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$S_DESC_OID"| awk '{$1=NR;$3="";print $0}'
+	$SNMPWALK -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$S_DESC_OID"| awk '{$1=(NR-1);$3="";print $0}'
 }
 
 recheck_args(){
