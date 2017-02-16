@@ -50,7 +50,7 @@ useme(){
 #Print OIDs
 print_oid_tree(){
 	$DEBUG "$SNMPWALK" -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_OID" >&2
-	$SNMPWALK -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_OID"| awk   'BEGIN{printf '$DATA_SECONDS'} {printf "\t"$NF}'
+	$SNMPWALK -v "$SNMP_VER" -On -c "$SNMP_COMM" "$SNMP_HOST" "$SNMP_OID"| awk  'BEGIN{printf '$DATA_SECONDS'} {printf "\t"$NF}'
 	if [ $? == 0 ];then
 		return 0
 	else
@@ -120,7 +120,7 @@ get_add_and_rotate(){
 	FILE_NAME="$1"  # It should be the same value that FILE_HIST
 	LINE_PRINT="$2" # It should be the same value that LINE_VALUES
 
-	SIZE_FILE=$(wc -l < "$1")
+	SIZE_FILE=$(wc -l < "$FILE_NAME")
 	if [ $SIZE_FILE == 0 ]; then
 		LAST_TIMESTAMP=0
 	else
@@ -138,7 +138,14 @@ get_add_and_rotate(){
 		$DEBUG "It is time!!!.  "$DATA_SECONDS" > $LAST_TIMESTAMP + $I_SEC_STEP"  >&2
 		if [ $SIZE_FILE -ge $I_SIZE_HIST ];then
 			$DEBUG "Rotate. Removing the first line."  >&2
-			sed -i -e "1d"  "$1"
+			rotate_first_line "$FILE_NAME"
+			#I will add one line, if only remove one... never it will reduce it
+			#  this extra check, can fix hypothetical over lines.
+			SIZE_FILE=$(wc -l < "$FILE_NAME")
+			if [ $SIZE_FILE -ge $I_SIZE_HIST ];then
+				$DEBUG "Rotate. Removing the first line."  >&2
+				rotate_first_line "$FILE_NAME"
+			fi
 		fi
 		#I will try to get previous vaule
 		echo "$2" >> "$1"
@@ -152,6 +159,17 @@ get_add_and_rotate(){
 	fi
 	echo "$LAST_LINE"
 }
+
+
+rotate_first_line(){
+	TMP_FILE="/tmp/sed.$(date +%s)-$$.tmp"
+	#I am not using sed -i, because is posible to have a bug, with differents users.
+	sed -e "1d"  "$1" > "$TMP_FILE"
+	cat "$TMP_FILE" > "$1"
+	rm -f "$TMP_FILE" > /dev/null 2>&1 
+}
+
+
 
 time_error_control(){
 	if [ -z "$1" ] || [ $1 == "ERR" ];then
@@ -342,7 +360,7 @@ $DEBUG "List line: '$LAST_LINE'"
 prorcess_line "$LINE_VALUES" "$LAST_LINE";
 OK=$?
 
-if [ $OK == 0 -a ! -z "$S_DESC_OID" ];then
+if [ ! -z "$S_DESC_OID" ];then
 	echo "Where: "
 	print_description_oid
 fi
